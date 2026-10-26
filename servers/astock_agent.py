@@ -8,7 +8,7 @@ HTTP/SSE 接口包装成 MCP 工具，让 Python 生态的 Agent 能直接复用
 **跨语言、跨进程、可被任意 MCP 客户端发现**的标准工具。
 
 前置：后端需先启动
-    cd E:\\MyWorkAndProject\\astock-agent\\backend && mvn spring-boot:run
+    cd <astock-agent>/backend && mvn spring-boot:run
 默认监听 127.0.0.1:8080；如开启鉴权，设 ASTOCK_TOKEN 环境变量。
 
 启动：python servers/astock_agent.py

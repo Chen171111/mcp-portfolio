@@ -20,13 +20,39 @@
 ## 快速开始
 
 ```bash
-# 1. 环境（必须 --system-site-packages，否则拿不到项目已有的 pandas）
-<有pandas的python> -m venv --system-site-packages .venv
-./.venv/Scripts/python.exe -m pip install mcp
+# 1. 环境（必须 --system-site-packages，否则拿不到被包装项目已有的 pandas）
+python -m venv --system-site-packages .venv
+./.venv/Scripts/python.exe -m pip install -r requirements.txt   # Linux/macOS: .venv/bin/python
 
-# 2. 协议层冒烟测试（不是 import 调函数，是真实 stdio 握手）
+# 2. 配置被包装项目的位置（见下节；同级目录可省略）
+
+# 3. 协议层冒烟测试（不是 import 调函数，是真实 stdio 握手）
 ./.venv/Scripts/python.exe tests/smoke_test.py
 ```
+
+## 配置
+
+路径不写死，按优先级解析：**环境变量 → 同级目录自动推断 → 结构化报错**。
+
+| 环境变量 | 指向 | 默认推断 |
+|---|---|---|
+| `QUANT_ETF_HOME` | 量化框架根目录 | `../quant/agentskill` |
+| `QUANT_STOCK_HOME` | 个股研究目录 | `../quant2` |
+| `QUANT_DB` | 交易数据库 | `$QUANT_ETF_HOME/state/trading.db` |
+| `ASTOCK_AGENT_HOME` | Java 投研 Agent 根目录 | `../astock-agent` |
+| `ASTOCK_BASE_URL` | Java 后端地址 | `http://127.0.0.1:8080` |
+| `ASTOCK_TOKEN` | 后端鉴权令牌（可选） | 空 |
+
+默认推断的逻辑是「假设本仓库与被包装项目平级」：
+
+```
+工作区/
+├── mcp-portfolio/     ← 本仓库
+├── quant/agentskill/  ← QUANT_ETF_HOME
+└── astock-agent/      ← ASTOCK_AGENT_HOME
+```
+
+依赖目录不存在时，server 仍能正常启动并列出工具，只在**调用时**返回带配置指引的错误。
 
 ## 客户端注册
 
@@ -36,16 +62,18 @@
 {
   "mcpServers": {
     "quant-core": {
-      "command": "E:\\MyWorkAndProject\\mcp-portfolio\\.venv\\Scripts\\python.exe",
-      "args": ["E:\\MyWorkAndProject\\mcp-portfolio\\servers\\quant_core.py"]
+      "command": "<本仓库绝对路径>/.venv/Scripts/python.exe",
+      "args": ["<本仓库绝对路径>/servers/quant_core.py"],
+      "env": { "QUANT_ETF_HOME": "<量化框架绝对路径>" }
     },
     "quant-portfolio": {
-      "command": "E:\\MyWorkAndProject\\mcp-portfolio\\.venv\\Scripts\\python.exe",
-      "args": ["E:\\MyWorkAndProject\\mcp-portfolio\\servers\\quant_portfolio.py"]
+      "command": "<本仓库绝对路径>/.venv/Scripts/python.exe",
+      "args": ["<本仓库绝对路径>/servers/quant_portfolio.py"],
+      "env": { "QUANT_DB": "<trading.db 绝对路径>" }
     },
     "astock-agent": {
-      "command": "E:\\MyWorkAndProject\\mcp-portfolio\\.venv\\Scripts\\python.exe",
-      "args": ["E:\\MyWorkAndProject\\mcp-portfolio\\servers\\astock_agent.py"],
+      "command": "<本仓库绝对路径>/.venv/Scripts/python.exe",
+      "args": ["<本仓库绝对路径>/servers/astock_agent.py"],
       "env": {
         "ASTOCK_BASE_URL": "http://127.0.0.1:8080",
         "ASTOCK_TOKEN": ""
@@ -54,6 +82,8 @@
   }
 }
 ```
+
+> Linux / macOS 把 `Scripts/python.exe` 换成 `bin/python`。
 
 注册后需要重启客户端，MCP server 才会被拉起。
 
@@ -150,6 +180,7 @@ mcp-portfolio/
 ## 已知限制
 
 - `astock-agent` 需要先启动 Java 后端（`mvn spring-boot:run`），未启动时返回结构化降级错误。
-- 路径写死在 `servers/_common.py`，换机器需要改 `QUANT_ETF_HOME` / `QUANT_DB`。
+- 被包装的量化框架 / 投研 Agent **不在本仓库内**，需自行准备并按上节配置路径。
 - 都是 stdio 传输，没有做 HTTP 部署（需要多客户端共享时再改 `transport="streamable-http"`）。
+- `quant-portfolio` 只读，不提供任何写入工具 —— 这是刻意设计，不是遗漏。
 ```

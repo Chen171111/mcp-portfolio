@@ -1,13 +1,16 @@
 """MCP Server: quant-core
 
-把个人 A 股量化框架（E:\\MyWorkAndProject\\quant\\agentskill）的能力
-以 MCP 协议标准化暴露，任何支持 MCP 的 Agent（Claude / WorkBuddy / Codex / Dify）
-都能直接调用，无需了解框架内部结构。
+把个人 A 股量化框架的能力以 MCP 协议标准化暴露，任何支持 MCP 的 Agent
+（Claude / Cursor / WorkBuddy / Dify）都能直接调用，无需了解框架内部结构。
 
 设计原则：
   1. 只读 —— 本 server 不下单、不写交易库，避免 Agent 误触实盘。
   2. 真实 —— 所有数据来自框架的 DataStore 缓存与 BacktestEngine，不做模拟。
-  3. 结构化 —— 返回 JSON，指标名与框架 compute_metrics 口径一致。
+  3. 延迟加载 —— 依赖目录缺失时 server 仍能启动并列出工具，
+     只在真正调用时返回带 hint 的结构化错误（便于部署排查）。
+
+依赖配置：环境变量 QUANT_ETF_HOME 指向量化框架根目录；
+未设置时自动推断为「与本仓库同级的 quant/agentskill」。
 
 启动：python servers/quant_core.py          （stdio，供 MCP 客户端拉起）
 """
@@ -20,14 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from _common import QUANT_ETF_HOME, inject_path, jsonable, wrap_error
-
-inject_path(QUANT_ETF_HOME)
-
-import config  # noqa: E402  —— 必须在 inject_path 之后
-import pipeline  # noqa: E402
-from dataprovider.store import DataStore  # noqa: E402
-from strategies.registry import list_strategies  # noqa: E402
+from _common import QUANT_ETF_HOME, inject_path, jsonable, require, wrap_error
 
 server = MCPServer(
     name="quant-core",
@@ -38,11 +34,36 @@ server = MCPServer(
     ),
 )
 
+# 延迟加载状态：避免依赖缺失时 server 直接起不来
+_state: dict = {"ready": False, "err": "", "config": None, "pipeline": None}
+
+
+def _ensure() -> str:
+    """就绪返回空串，否则返回错误说明。"""
+    if _state["ready"]:
+        return ""
+    if _state["err"]:
+        return _state["err"]
+    try:
+        require(QUANT_ETF_HOME, "量化框架目录", "QUANT_ETF_HOME")
+        inject_path(QUANT_ETF_HOME)
+        import config  # noqa: PLC0415  —— 必须等 sys.path 就位后再 import
+        import pipeline  # noqa: PLC0415
+
+        _state.update(ready=True, config=config, pipeline=pipeline)
+        return ""
+    except Exception as e:  # noqa: BLE001
+        _state["err"] = f"{type(e).__name__}: {e}"
+        return _state["err"]
+
 
 @server.tool(description="列出框架内置的全部策略及其默认参数。回测前先调这个确认策略名。")
 def list_strategy_catalog() -> dict:
+    if err := _ensure():
+        return {"ok": False, "tool": "list_strategy_catalog", "error": err}
     try:
-        from strategies.registry import STRATEGIES
+        inject_path(QUANT_ETF_HOME)
+        from strategies.registry import STRATEGIES  # noqa: PLC0415
 
         catalog = []
         for name, cls in STRATEGIES.items():
@@ -59,7 +80,10 @@ def list_strategy_catalog() -> dict:
 
 @server.tool(description="列出预置股票池（ETF 宽基/行业/防御/全球/科技进攻 等），返回代码与名称。")
 def list_pools() -> dict:
+    if err := _ensure():
+        return {"ok": False, "tool": "list_pools", "error": err}
     try:
+        config = _state["config"]
         pools = []
         for name, codes in config.RECOMMENDED_POOLS.items():
             pools.append({
@@ -88,7 +112,12 @@ def run_backtest(
     topk: int = 5,
     rebalance: int = 5,
 ) -> dict:
+    if err := _ensure():
+        return {"ok": False, "tool": "run_backtest", "error": err}
     try:
+        config = _state["config"]
+        pipeline = _state["pipeline"]
+
         if pool not in config.RECOMMENDED_POOLS:
             return {
                 "ok": False,
@@ -122,7 +151,12 @@ def run_backtest(
 
 @server.tool(description="拉单只标的最近 N 个交易日的行情（开高低收量），用于快速看盘。")
 def get_quote(code: str, days: int = 20) -> dict:
+    if err := _ensure():
+        return {"ok": False, "tool": "get_quote", "error": err}
     try:
+        config = _state["config"]
+        from dataprovider.store import DataStore  # noqa: PLC0415
+
         store = DataStore()
         store.ensure([code])
         df = store.read(code)
@@ -146,7 +180,10 @@ def get_quote(code: str, days: int = 20) -> dict:
 
 @server.tool(description="查看框架的默认风控与成本配置（熔断、波动率目标、手续费口径）。")
 def get_risk_config() -> dict:
+    if err := _ensure():
+        return {"ok": False, "tool": "get_risk_config", "error": err}
     try:
+        config = _state["config"]
         return {
             "ok": True,
             "risk": jsonable(config.RISK),

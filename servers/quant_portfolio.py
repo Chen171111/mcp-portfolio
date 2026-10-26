@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from mcp.server.mcpserver import MCPServer
 
-from _common import QUANT_DB, jsonable, wrap_error
+from _common import QUANT_DB, jsonable, require, wrap_error
 
 server = MCPServer(
     name="quant-portfolio",
@@ -35,10 +35,9 @@ server = MCPServer(
 
 
 def _conn() -> sqlite3.Connection:
-    if not QUANT_DB.exists():
-        raise FileNotFoundError(f"交易库不存在: {QUANT_DB}")
+    db = require(QUANT_DB, "交易数据库", "QUANT_DB")
     # 只读打开：即使代码有 bug 也写不进去
-    return sqlite3.connect(f"file:{QUANT_DB}?mode=ro", uri=True)
+    return sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 
 
 def _rows(sql: str, params: tuple = ()) -> list[dict]:

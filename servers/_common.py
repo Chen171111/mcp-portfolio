@@ -1,20 +1,51 @@
-"""共享工具：路径注入、JSON 安全化、异常包装。
+"""共享工具：路径解析、JSON 安全化、异常包装。
 
 三个 MCP server 都要 import 真实项目模块，这里集中处理 sys.path 与类型清洗。
+
+路径策略（按优先级）：
+  1. 环境变量（QUANT_ETF_HOME / QUANT_STOCK_HOME / ASTOCK_AGENT_HOME / QUANT_DB）
+  2. 同仓推断：假定被包装的项目与本仓库同级（../quant/agentskill 等）
+  3. 都没有 → 调用工具时返回带 hint 的结构化错误，而不是启动即崩
+
+这样本机开箱即用，别人 clone 下来按 README 设环境变量即可。
 """
 from __future__ import annotations
 
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
-# 真实项目根目录（本机实况，另一台机器按需改 .env 或环境变量覆盖）
-QUANT_ETF_HOME = Path(r"E:\MyWorkAndProject\quant\agentskill")
-QUANT_STOCK_HOME = Path(r"E:\MyWorkAndProject\quant2")
-ASTOCK_AGENT_HOME = Path(r"E:\MyWorkAndProject\astock-agent")
+# 本仓库根目录（mcp-portfolio/），其父目录视为「项目工作区」
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_WORKSPACE = _REPO_ROOT.parent
 
-QUANT_DB = QUANT_ETF_HOME / "state" / "trading.db"
+
+def _resolve(env_key: str, *candidates: Path) -> Path:
+    """环境变量优先，其次按候选顺序找第一个存在的，都没有则返回首选（延迟报错）。"""
+    raw = os.environ.get(env_key)
+    if raw:
+        return Path(raw).expanduser()
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[0]
+
+
+QUANT_ETF_HOME = _resolve(
+    "QUANT_ETF_HOME",
+    _WORKSPACE / "quant" / "agentskill",
+    _WORKSPACE / "agentskill",
+)
+QUANT_STOCK_HOME = _resolve("QUANT_STOCK_HOME", _WORKSPACE / "quant2")
+ASTOCK_AGENT_HOME = _resolve("ASTOCK_AGENT_HOME", _WORKSPACE / "astock-agent")
+
+QUANT_DB = _resolve(
+    "QUANT_DB",
+    QUANT_ETF_HOME / "state" / "trading.db",
+    _WORKSPACE / "quant" / "agentskill" / "state" / "trading.db",
+)
 
 
 def inject_path(root: Path) -> None:
@@ -24,11 +55,23 @@ def inject_path(root: Path) -> None:
         sys.path.insert(0, p)
 
 
+def require(path: Path, what: str, env_key: str) -> Path:
+    """确认依赖存在，不存在时抛带指引的错误（由工具层转成结构化返回）。"""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{what} 不存在: {path}\n"
+            f"请设置环境变量 {env_key} 指向正确位置，或把仓库放在被包装项目的同级目录。"
+        )
+    return path
+
+
 def jsonable(obj: Any) -> Any:
     """把 numpy / pandas / NaN 递归转成 JSON 可序列化结构。
 
     MCP 协议要求返回值可序列化，而量化返回值里到处都是 np.float64 和 NaN，
     直接返回会在序列化层炸掉。统一在这里收口。
+
+    注意 NaN 转 None 而不是 0 —— 0 是有效数值，会把「没数据」伪装成「数据是 0」。
     """
     if obj is None or isinstance(obj, (bool, int, str)):
         return obj
